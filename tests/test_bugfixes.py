@@ -114,3 +114,90 @@ class BugfixesTestCase(TestCase):
         """Test that logs directory and log file exists"""
         log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
         self.assertTrue(os.path.exists(log_dir))
+
+    def test_order_list_returns_cards_and_orders_table_and_results(self):
+        """Test that /order/orders/ returns cards, orders_table, and results for frontend T8 component"""
+        OrderItem.objects.create(
+            order=self.order,
+            product=self.product,
+            qty=Decimal('1.0'),
+            unit_price=Decimal('45000.0'),
+            cost_price=Decimal('25000.0'),
+            status='served'
+        )
+        res = self.client.get('/order/orders/')
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('cards', res.data)
+        self.assertIn('orders_table', res.data)
+        self.assertIn('results', res.data)
+
+        # Check cards structure
+        cards = res.data['cards']
+        self.assertEqual(cards['jami_buyurtmalar'], 1)
+        self.assertEqual(cards['tushum'], 45000.0)
+        self.assertEqual(cards['bekor_qilingan'], 0)
+        self.assertEqual(cards['ortacha_chek'], 45000.0)
+
+        # Check orders_table structure
+        self.assertEqual(len(res.data['orders_table']), 1)
+        row = res.data['orders_table'][0]
+        self.assertIn('buyurtma_raqami', row)
+        self.assertIn('joylashuv', row)
+        self.assertIn('ofitsiant', row)
+        self.assertIn('mehmonlar_soni', row)
+        self.assertIn('status', row)
+        self.assertIn('sana_vaqt', row)
+        self.assertIn('summa', row)
+        self.assertEqual(row['status'], 'paid')
+        self.assertEqual(row['summa'], 45000.0)
+
+    def test_umumiy_hisobot_returns_dinamika_and_kassalar_statistikasi(self):
+        """Test that /kitchen/umumiy-hisobot/ returns jami_tushum, dinamika, and kassalar_statistikasi for frontend Vbe component"""
+        OrderItem.objects.create(
+            order=self.order,
+            product=self.product,
+            qty=Decimal('1.0'),
+            unit_price=Decimal('45000.0'),
+            cost_price=Decimal('25000.0'),
+            status='served'
+        )
+        res = self.client.get('/kitchen/umumiy-hisobot/')
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('jami_tushum', res.data)
+        self.assertIn('jami_foyda', res.data)
+        self.assertIn('dinamika', res.data)
+        self.assertIn('kassalar_statistikasi', res.data)
+        self.assertEqual(res.data['jami_tushum'], 45000.0)
+        self.assertEqual(res.data['jami_foyda'], 20000.0)
+        self.assertGreaterEqual(len(res.data['dinamika']), 1)
+        self.assertGreaterEqual(len(res.data['kassalar_statistikasi']), 1)
+
+    def test_sotuv_and_xodimlar_and_abc_reports(self):
+        """Test that all kitchen report endpoints return 200 and expected fields"""
+        OrderItem.objects.create(
+            order=self.order,
+            product=self.product,
+            qty=Decimal('1.0'),
+            unit_price=Decimal('45000.0'),
+            cost_price=Decimal('25000.0'),
+            status='served'
+        )
+        # Sotuv
+        r_sotuv = self.client.get('/kitchen/sotuv-hisoboti/')
+        self.assertEqual(r_sotuv.status_code, 200)
+        self.assertGreaterEqual(len(r_sotuv.data), 1)
+        self.assertIn('nomi', r_sotuv.data[0])
+        self.assertIn('tushum', r_sotuv.data[0])
+
+        # Xodimlar
+        r_xodim = self.client.get('/kitchen/xodimlar-hisoboti/')
+        self.assertEqual(r_xodim.status_code, 200)
+        self.assertGreaterEqual(len(r_xodim.data), 1)
+        self.assertIn('sotuvchi', r_xodim.data[0])
+        self.assertIn('tushum', r_xodim.data[0])
+
+        # ABC
+        r_abc = self.client.get('/kitchen/abc-analysis/')
+        self.assertEqual(r_abc.status_code, 200)
+        self.assertGreaterEqual(len(r_abc.data), 1)
+        self.assertIn('abc_class', r_abc.data[0])

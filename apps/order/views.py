@@ -28,10 +28,117 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        branch_id = self.request.query_params.get('branch_id') or self.request.query_params.get('branch')
+        params = self.request.query_params
+        branch_id = params.get('branch_id') or params.get('branch') or params.get('filial')
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
+
+        table_id = params.get('table') or params.get('table_id')
+        if table_id:
+            qs = qs.filter(table_id=table_id)
+
+        status_param = params.get('status')
+        if status_param:
+            if status_param in ['tolangan', 'paid']:
+                qs = qs.filter(status__in=['paid', 'closed', 'completed'])
+            elif status_param in ['ochiq', 'open']:
+                qs = qs.filter(status__in=['open', 'ready', 'cooking', 'sent_to_kitchen'])
+            elif status_param in ['bekor_qilingan', 'cancelled', 'canceled']:
+                qs = qs.filter(status__in=['cancelled', 'canceled'])
+            else:
+                qs = qs.filter(status=status_param)
+
+        type_param = params.get('type') or params.get('order_type')
+        if type_param:
+            qs = qs.filter(type=type_param)
+
+        waiter_id = params.get('assigned_waiter') or params.get('waiter_id') or params.get('employee_id')
+        if waiter_id:
+            qs = qs.filter(assigned_waiter_id=waiter_id)
+
+        start_date = params.get('start_date') or params.get('from_date') or params.get('from')
+        if start_date:
+            qs = qs.filter(created_at__date__gte=start_date)
+
+        end_date = params.get('end_date') or params.get('to_date') or params.get('to')
+        if end_date:
+            qs = qs.filter(created_at__date__lte=end_date)
+
+        search_query = params.get('search') or params.get('q')
+        if search_query:
+            from django.db.models import Q
+            qs = qs.filter(Q(number__icontains=search_query) | Q(note__icontains=search_query) | Q(id__icontains=search_query))
+
         return qs
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        # Calculate cards statistics
+        total_orders_count = queryset.count()
+        paid_orders = queryset.filter(status__in=['paid', 'closed', 'completed'])
+        total_revenue = paid_orders.aggregate(s=Sum('total_amount'))['s'] or Decimal('0.0')
+        cancelled_count = queryset.filter(status__in=['cancelled', 'canceled']).count()
+        paid_count = paid_orders.count()
+        avg_check = (total_revenue / paid_count) if paid_count > 0 else Decimal('0.0')
+
+        cards = {
+            "jami_buyurtmalar": total_orders_count,
+            "tushum": float(total_revenue),
+            "bekor_qilingan": cancelled_count,
+            "ortacha_chek": round(float(avg_check), 2)
+        }
+
+        # Build orders_table for T8 component
+        orders_table = []
+        for order in queryset:
+            # Determine joylashuv
+            if order.type == 'takeaway':
+                joylashuv = "Olib ketish (Saboy)"
+                stol_label = "takeaway"
+            elif order.type == 'delivery':
+                joylashuv = "Yetkazib berish"
+                stol_label = "delivery"
+            elif order.table:
+                joylashuv = order.table.name
+                stol_label = order.table.name
+            else:
+                joylashuv = "—"
+                stol_label = "—"
+
+            waiter_name = order.assigned_waiter.name if order.assigned_waiter else "Admin"
+            sana_vaqt_str = timezone.localtime(order.created_at).strftime("%d.%m.%Y %H:%M") if order.created_at else "—"
+
+            orders_table.append({
+                "id": order.id,
+                "buyurtma_raqami": order.number or order.id,
+                "number": order.number or order.id,
+                "joylashuv": joylashuv,
+                "stol": stol_label,
+                "ofitsiant": waiter_name,
+                "assigned_waiter": order.assigned_waiter_id,
+                "assigned_waiter_id": order.assigned_waiter_id,
+                "mehmonlar_soni": order.guests_count or 1,
+                "status": order.status,
+                "sana_vaqt": sana_vaqt_str,
+                "created_at": order.created_at.isoformat() if order.created_at else None,
+                "summa": float(order.total_amount),
+                "total_amount": float(order.total_amount),
+                "type": order.type,
+                "table": order.table_id,
+                "note": order.note or "",
+                "items": OrderItemSerializer(order.items.all(), many=True).data
+            })
+
+        # Serialized full objects for all other components (POS, Kassa, etc.)
+        results_data = self.get_serializer(queryset, many=True).data
+
+        return Response({
+            "count": total_orders_count,
+            "cards": cards,
+            "orders_table": orders_table,
+            "results": results_data
+        })
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
