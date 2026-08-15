@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from decimal import Decimal
 from apps.core.models import TimeStampedModel
 from apps.sozlamalar.models import Branch
 from apps.employee.models import Employee
@@ -69,17 +70,19 @@ class Order(TimeStampedModel):
 
     def recalculate_totals(self):
         items = self.items.all()
-        subtotal = sum((item.qty * item.unit_price for item in items), 0)
+        subtotal = sum((item.qty * item.unit_price for item in items), Decimal('0.0'))
         self.base_amount = subtotal
         
         # Calculate discount
+        disc_val = Decimal(str(self.discount_value or 0))
         if self.discount_type == 'percent':
-            self.discount_amount = (subtotal * self.discount_value / 100) if self.discount_value > 0 else 0
+            self.discount_amount = (subtotal * disc_val / Decimal('100.0')) if disc_val > 0 else Decimal('0.0')
         else:
-            self.discount_amount = self.discount_value or 0
+            self.discount_amount = disc_val
         
-        after_discount = max(0, subtotal - self.discount_amount)
-        self.service_amount = (after_discount * self.service_percent / 100) if self.service_percent > 0 else 0
+        after_discount = max(Decimal('0.0'), subtotal - self.discount_amount)
+        svc_pct = Decimal(str(self.service_percent or 0))
+        self.service_amount = (after_discount * svc_pct / Decimal('100.0')) if svc_pct > 0 else Decimal('0.0')
         self.total_amount = after_discount + self.service_amount
         self.save(update_fields=['base_amount', 'discount_amount', 'service_amount', 'total_amount', 'updated_at'])
 

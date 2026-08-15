@@ -6,9 +6,13 @@ import os
 
 from apps.employee.models import Employee, Role
 from apps.sozlamalar.models import Branch, OrderFlowSettings
-from apps.table.models import Table, Product
+from apps.table.models import Table, Product, ProductIngredient
 from apps.order.models import Order, OrderItem
 from apps.finance.models import FinanceAccount, FinanceCategory, FinanceTransaction
+from apps.inventory.models import (
+    Warehouse, Supplier, InventoryProduct, Purchase, PurchaseItem,
+    Realization, RealizationItem, WriteOff, InventoryStockHistory
+)
 
 class BugfixesTestCase(TestCase):
     def setUp(self):
@@ -201,3 +205,91 @@ class BugfixesTestCase(TestCase):
         self.assertEqual(r_abc.status_code, 200)
         self.assertGreaterEqual(len(r_abc.data), 1)
         self.assertIn('abc_class', r_abc.data[0])
+
+    def test_inventory_purchases_list_and_stats(self):
+        """Test that /inventory/purchases/ returns results and stats with expected fields"""
+        wh = Warehouse.objects.create(name="Asosiy ombor", branch=self.branch)
+        sup = Supplier.objects.create(name="Agro Meat MCHJ")
+        prod = InventoryProduct.objects.create(name="Mol go'shti", warehouse=wh, purchase_price=Decimal('80000.0'), current_stock=Decimal('10.0'))
+        
+        # Create purchase
+        res_create = self.client.post('/inventory/purchases/', {
+            'warehouse': wh.id,
+            'supplier': sup.id,
+            'document_number': 'XARID-001',
+            'items': [
+                {'product': prod.id, 'quantity': 10, 'purchase_price': 80000, 'margin_percent': 25, 'selling_price': 100000}
+            ]
+        }, format='json')
+        self.assertEqual(res_create.status_code, 201)
+
+        # GET list
+        res_list = self.client.get('/inventory/purchases/')
+        self.assertEqual(res_list.status_code, 200)
+        self.assertIn('stats', res_list.data)
+        self.assertIn('results', res_list.data)
+        self.assertEqual(res_list.data['stats']['umumiy_xaridlar'], 1)
+        self.assertEqual(res_list.data['stats']['umumiy_summa'], 800000.0)
+        self.assertEqual(res_list.data['stats']['mahsulotlar_soni'], 1)
+
+        # Check item fields
+        row = res_list.data['results'][0]
+        self.assertEqual(row['supplier_name'], 'Agro Meat MCHJ')
+        self.assertEqual(row['tamiNotchi'], 'Agro Meat MCHJ')
+        self.assertEqual(row['ombor'], 'Asosiy ombor')
+        self.assertEqual(row['hujjat_raqami'], 'XARID-001')
+
+    def test_inventory_realizations_list_and_stats(self):
+        """Test that /inventory/realizations/ returns results and stats with expected fields"""
+        wh = Warehouse.objects.create(name="Asosiy ombor", branch=self.branch)
+        prod = InventoryProduct.objects.create(name="Guruch", warehouse=wh, purchase_price=Decimal('25000.0'), selling_price=Decimal('35000.0'), current_stock=Decimal('50.0'))
+
+        # Create realization
+        res_create = self.client.post('/inventory/realizations/', {
+            'warehouse': 'Asosiy ombor',
+            'agent': 'Optom Xaridor',
+            'document_number': 'REAL-001',
+            'items': [
+                {'product': prod.id, 'quantity': 10, 'purchase_price': 25000, 'selling_price': 35000}
+            ]
+        }, format='json')
+        self.assertEqual(res_create.status_code, 201)
+
+        # GET list
+        res_list = self.client.get('/inventory/realizations/')
+        self.assertEqual(res_list.status_code, 200)
+        self.assertIn('stats', res_list.data)
+        self.assertIn('results', res_list.data)
+        self.assertEqual(res_list.data['stats']['jami_realizatsiyalar'], 1)
+        self.assertEqual(res_list.data['stats']['umumiy_summa'], 350000.0)
+        self.assertEqual(res_list.data['stats']['tovar_pozitsiyalari'], 1)
+
+        row = res_list.data['results'][0]
+        self.assertEqual(row['kontragent'], 'Optom Xaridor')
+        self.assertEqual(row['ombor'], 'Asosiy ombor')
+        self.assertEqual(row['doc_no'], 'REAL-001')
+
+    def test_order_mark_paid_creates_realization(self):
+        """Test that paying an order automatically logs a Realization in inventory"""
+        wh = Warehouse.objects.create(name="Asosiy ombor", branch=self.branch)
+        raw = InventoryProduct.objects.create(name="Go'sht", warehouse=wh, purchase_price=Decimal('80000.0'), current_stock=Decimal('20.0'))
+        ProductIngredient.objects.create(product=self.product, maxsulot=raw, amount=Decimal('0.2'), unit='kg')
+
+        order = Order.objects.create(
+            branch=self.branch,
+            table=self.table,
+            assigned_waiter=self.employee,
+            status='open',
+            number=9999
+        )
+        OrderItem.objects.create(order=order, product=self.product, qty=Decimal('2.0'), unit_price=Decimal('45000.0'), cost_price=Decimal('25000.0'))
+        order.recalculate_totals()
+
+        res_pay = self.client.post(f'/order/orders/{order.id}/mark_paid/', {'payment_type': 'cash'}, format='json')
+        self.assertEqual(res_pay.status_code, 200)
+
+        # Check that Realization exists
+        real = Realization.objects.filter(document_number=f"BUYURTMA-{order.number}").first()
+        self.assertIsNotNone(real)
+        self.assertEqual(real.total_amount, Decimal('99000.00')) # 90000 + 10% service
+

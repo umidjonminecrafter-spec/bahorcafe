@@ -14,7 +14,7 @@ logger = logging.getLogger('bahor_app')
 from .models import Order, OrderItem
 from .serializers import OrderSerializer, OrderItemSerializer
 from apps.table.models import Table, Product, ProductIngredient
-from apps.inventory.models import InventoryProduct, InventoryStockHistory
+from apps.inventory.models import InventoryProduct, InventoryStockHistory, Warehouse, Realization, RealizationItem
 from apps.finance.models import FinanceTransaction, FinanceAccount, FinanceCategory
 from apps.sozlamalar.models import ReceiptSettings, TaxSettings, Branch
 
@@ -265,6 +265,52 @@ class OrderViewSet(viewsets.ModelViewSet):
                     reference_id=f"Buyurtma #{order.number or order.id}",
                     note=f"{product.name} x {item.qty} tayyorlanishi uchun avto chiqim"
                 )
+
+        # Create/Link Realization record in Ombor
+        try:
+            wh = Warehouse.objects.filter(branch=order.branch).first() or Warehouse.objects.first()
+            doc_no = f"BUYURTMA-{order.number or order.id}"
+            agent_label = f"Kassa ({order.assigned_waiter.name if order.assigned_waiter else 'Ofitsiant'})"
+
+            realization, created = Realization.objects.get_or_create(
+                document_number=doc_no,
+                defaults={
+                    'warehouse': wh,
+                    'agent': agent_label,
+                    'date': timezone.now().date(),
+                    'total_amount': order.total_amount,
+                    'margin_amount': Decimal('0.0'),
+                    'notes': f"Kassadan to'langan buyurtma #{order.number or order.id}"
+                }
+            )
+            if created:
+                total_sale = Decimal('0.0')
+                total_cost = Decimal('0.0')
+                for item in order.items.all():
+                    p_dish = item.product
+                    if not p_dish:
+                        continue
+                    for ing in p_dish.ingredients.all():
+                        raw_mat = ing.maxsulot
+                        if not raw_mat:
+                            continue
+                        used_qty = ing.amount * item.qty
+                        p_cost = raw_mat.purchase_price
+                        p_sale = raw_mat.selling_price if raw_mat.selling_price > 0 else (p_cost * Decimal('1.3'))
+                        RealizationItem.objects.create(
+                            realization=realization,
+                            product=raw_mat,
+                            quantity=used_qty,
+                            purchase_price=p_cost,
+                            selling_price=p_sale
+                        )
+                        total_sale += (used_qty * p_sale)
+                        total_cost += (used_qty * p_cost)
+                realization.total_amount = max(order.total_amount, total_sale)
+                realization.margin_amount = max(Decimal('0.0'), realization.total_amount - total_cost)
+                realization.save(update_fields=['total_amount', 'margin_amount'])
+        except Exception as e:
+            logger.warning(f"Could not create realization for order #{order.id}: {e}")
 
         # Record Finance Transaction
         cat, _ = FinanceCategory.objects.get_or_create(name="Sotuv tushumi", defaults={"category_type": "INCOME"})

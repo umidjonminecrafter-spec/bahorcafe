@@ -19,7 +19,7 @@ from apps.table.models import Table, TablePart, TableLayout, ProductCategory, Pr
 from apps.kitchen.models import Department, SemiProduct, SemiProductIngredient
 from apps.inventory.models import (
     Warehouse, InventoryCategory, Unit, Supplier, InventoryProduct,
-    Purchase, PurchaseItem, Realization, RealizationItem, InventoryStockHistory
+    Purchase, PurchaseItem, WriteOff, WriteOffItem, Realization, RealizationItem, InventoryStockHistory
 )
 from apps.order.models import Order, OrderItem
 from apps.finance.models import FinanceAccount, FinanceCategory, FinanceTransaction
@@ -345,7 +345,7 @@ def seed():
 
     for day_offset in range(6, -1, -1):
         dt = now - timedelta(days=day_offset, hours=2)
-        # Create 3-5 orders per day
+        # Create 3 orders per day
         for ord_idx in range(3):
             tbl = saved_tables[ord_idx % len(saved_tables)]
             order = Order.objects.create(
@@ -392,12 +392,306 @@ def seed():
                 date=dt.date()
             )
 
+            # Auto Realization for this paid order
+            order_real, _ = Realization.objects.get_or_create(
+                document_number=f"BUYURTMA-{order.number}",
+                defaults={
+                    'warehouse': main_wh,
+                    'agent': f"Kassa ({waiter_emp.name})",
+                    'date': dt.date(),
+                    'total_amount': order.total_amount,
+                    'margin_amount': Decimal('45000.0'),
+                    'notes': f"Kassadan avtomatik ayirish (Buyurtma #{order.number})"
+                }
+            )
+            order_real.created_at = dt
+            order_real.save(update_fields=['created_at'])
+
+            RealizationItem.objects.get_or_create(
+                realization=order_real,
+                product=saved_raw["Mol go'shti (lahm)"],
+                defaults={
+                    'quantity': Decimal('0.300'),
+                    'purchase_price': Decimal('85000.00'),
+                    'selling_price': Decimal('110000.00')
+                }
+            )
+            RealizationItem.objects.get_or_create(
+                realization=order_real,
+                product=saved_raw["Coca-Cola 1.5L"],
+                defaults={
+                    'quantity': Decimal('1.000'),
+                    'purchase_price': Decimal('11000.00'),
+                    'selling_price': Decimal('16000.00')
+                }
+            )
+
+    # 10. Sample Purchases (Xaridlar) for past 25 days
+    supplier3, _ = Supplier.objects.get_or_create(
+        name="Toshkent Oziq-Ovqat Optom MCHJ",
+        defaults={'phone': "+998901230003", 'company': "Toshkent Optom"}
+    )
+    supplier4, _ = Supplier.objects.get_or_create(
+        name="Vodil Dehqon Ferma",
+        defaults={'phone': "+998901230004", 'company': "Vodil Ferma"}
+    )
+
+    purchases_seed = [
+        {
+            "doc": "XARID-2026-001", "date_offset": 22, "supplier": supplier1, "wh": main_wh,
+            "items": [
+                ("Mol go'shti (lahm)", 50.0, 85000, 20.0, 102000),
+                ("Qo'y go'shti (lahm)", 30.0, 95000, 25.0, 118750),
+            ]
+        },
+        {
+            "doc": "XARID-2026-002", "date_offset": 18, "supplier": supplier2, "wh": main_wh,
+            "items": [
+                ("Guruch (Lazer)", 100.0, 28000, 25.0, 35000),
+                ("Piyoz", 80.0, 3500, 30.0, 4550),
+                ("Sabzi (sariq)", 70.0, 4000, 30.0, 5200),
+            ]
+        },
+        {
+            "doc": "XARID-2026-003", "date_offset": 14, "supplier": supplier3, "wh": main_wh,
+            "items": [
+                ("Coca-Cola 1.5L", 120.0, 11000, 45.45, 16000),
+                ("Fanta 1.5L", 80.0, 11000, 45.45, 16000),
+                ("O'simlik yog'i (paxta)", 50.0, 18000, 25.0, 22500),
+            ]
+        },
+        {
+            "doc": "XARID-2026-004", "date_offset": 9, "supplier": supplier1, "wh": main_wh,
+            "items": [
+                ("Mol go'shti (lahm)", 40.0, 85000, 20.0, 102000),
+                ("Ko'k choy (qadoq)", 15.0, 35000, 30.0, 45500),
+            ]
+        },
+        {
+            "doc": "XARID-2026-005", "date_offset": 5, "supplier": supplier4, "wh": kitchen_wh,
+            "items": [
+                ("Tandir non", 100.0, 3000, 66.6, 5000),
+                ("Piyoz", 50.0, 3500, 30.0, 4550),
+            ]
+        },
+        {
+            "doc": "XARID-2026-006", "date_offset": 1, "supplier": supplier1, "wh": main_wh,
+            "items": [
+                ("Mol go'shti (lahm)", 35.0, 85000, 20.0, 102000),
+                ("Qo'y go'shti (lahm)", 25.0, 95000, 25.0, 118750),
+                ("Guruch (Lazer)", 50.0, 28000, 25.0, 35000),
+            ]
+        }
+    ]
+
+    for p_info in purchases_seed:
+        p_date = (now - timedelta(days=p_info["date_offset"])).date()
+        p_dt = now - timedelta(days=p_info["date_offset"], hours=4)
+        purch, _ = Purchase.objects.get_or_create(
+            document_number=p_info["doc"],
+            defaults={
+                'warehouse': p_info["wh"],
+                'supplier': p_info["supplier"],
+                'date': p_date,
+                'status': 'completed',
+                'notes': f"{p_info['supplier'].name} dan rejaviy tovar xaridi"
+            }
+        )
+        purch.created_at = p_dt
+        purch.save(update_fields=['created_at'])
+
+        p_total = Decimal('0.0')
+        for r_name, q, c, m, s in p_info["items"]:
+            if r_name in saved_raw:
+                raw = saved_raw[r_name]
+                p_item, _ = PurchaseItem.objects.get_or_create(
+                    purchase=purch,
+                    product=raw,
+                    defaults={
+                        'quantity': Decimal(str(q)),
+                        'purchase_price': Decimal(str(c)),
+                        'margin_percent': Decimal(str(m)),
+                        'selling_price': Decimal(str(s)),
+                    }
+                )
+                p_total += Decimal(str(q * c))
+
+                InventoryStockHistory.objects.get_or_create(
+                    product=raw,
+                    reference_id=f"Xarid #{purch.document_number}",
+                    defaults={
+                        'movement_type': 'in',
+                        'quantity': Decimal(str(q)),
+                        'previous_stock': raw.current_stock,
+                        'new_stock': raw.current_stock + Decimal(str(q)),
+                        'note': f"Xarid orqali kirim ({p_info['supplier'].name})"
+                    }
+                )
+
+        purch.total_amount = p_total
+        purch.save(update_fields=['total_amount'])
+
+        # Corresponding finance transaction
+        FinanceTransaction.objects.get_or_create(
+            description=f"Xarid #{purch.document_number} ({p_info['supplier'].name})",
+            defaults={
+                'branch': branch,
+                'account': acc_cash,
+                'category': f_cat_purchase,
+                'transaction_type': 'EXPENSE',
+                'payment_type': 'cash',
+                'amount': p_total,
+                'source': 'ombor',
+                'date': p_date
+            }
+        )
+
+    # 11. Sample Direct Wholesale Realizations (Optom Sotuv / Banketlar)
+    realizations_seed = [
+        {
+            "doc": "REAL-2026-001", "date_offset": 20, "agent": "Akbar Aka (Choyxona filiali)", "wh": main_wh,
+            "items": [
+                ("Mol go'shti (lahm)", 15.0, 85000, 105000),
+                ("Guruch (Lazer)", 25.0, 28000, 35000),
+            ]
+        },
+        {
+            "doc": "REAL-2026-002", "date_offset": 15, "agent": "Saidbek Banket Xizmati", "wh": main_wh,
+            "items": [
+                ("Coca-Cola 1.5L", 40.0, 11000, 16000),
+                ("Fanta 1.5L", 25.0, 11000, 16000),
+                ("Tandir non", 50.0, 3000, 5000),
+            ]
+        },
+        {
+            "doc": "REAL-2026-003", "date_offset": 8, "agent": "Navro'z To'yxona Buyurtmasi", "wh": main_wh,
+            "items": [
+                ("Qo'y go'shti (lahm)", 20.0, 95000, 120000),
+                ("Guruch (Lazer)", 30.0, 28000, 35000),
+                ("Sabzi (sariq)", 20.0, 4000, 5500),
+            ]
+        },
+        {
+            "doc": "REAL-2026-004", "date_offset": 3, "agent": "Osh Markazi Kontragent", "wh": main_wh,
+            "items": [
+                ("Mol go'shti (lahm)", 10.0, 85000, 105000),
+                ("Piyoz", 30.0, 3500, 4500),
+            ]
+        }
+    ]
+
+    for r_info in realizations_seed:
+        r_date = (now - timedelta(days=r_info["date_offset"])).date()
+        r_dt = now - timedelta(days=r_info["date_offset"], hours=3)
+        real, _ = Realization.objects.get_or_create(
+            document_number=r_info["doc"],
+            defaults={
+                'warehouse': r_info["wh"],
+                'agent': r_info["agent"],
+                'date': r_date,
+                'notes': f"Optom tovar realizatsiyasi ({r_info['agent']})"
+            }
+        )
+        real.created_at = r_dt
+        real.save(update_fields=['created_at'])
+
+        r_total = Decimal('0.0')
+        r_cost = Decimal('0.0')
+
+        for r_name, q, c, s in r_info["items"]:
+            if r_name in saved_raw:
+                raw = saved_raw[r_name]
+                RealizationItem.objects.get_or_create(
+                    realization=real,
+                    product=raw,
+                    defaults={
+                        'quantity': Decimal(str(q)),
+                        'purchase_price': Decimal(str(c)),
+                        'selling_price': Decimal(str(s)),
+                    }
+                )
+                r_total += Decimal(str(q * s))
+                r_cost += Decimal(str(q * c))
+
+                InventoryStockHistory.objects.get_or_create(
+                    product=raw,
+                    reference_id=f"Realizatsiya #{real.document_number}",
+                    defaults={
+                        'movement_type': 'realization',
+                        'quantity': Decimal(str(q)),
+                        'previous_stock': raw.current_stock,
+                        'new_stock': max(Decimal('0.0'), raw.current_stock - Decimal(str(q))),
+                        'note': f"Realizatsiya sotuvi ({r_info['agent']})"
+                    }
+                )
+
+        real.total_amount = r_total
+        real.margin_amount = max(Decimal('0.0'), r_total - r_cost)
+        real.save(update_fields=['total_amount', 'margin_amount'])
+
+    # 12. Sample WriteOffs (Chiqimlar / Spisaniye)
+    writeoffs_seed = [
+        {
+            "reason": "Yaroqlilik muddati o'tgan", "date_offset": 12, "wh": main_wh,
+            "items": [("Piyoz", 5.0), ("Tandir non", 4.0)]
+        },
+        {
+            "reason": "Zararlangan mahsulot", "date_offset": 4, "wh": kitchen_wh,
+            "items": [("Sabzi (sariq)", 3.0)]
+        }
+    ]
+
+    for w_info in writeoffs_seed:
+        w_date = (now - timedelta(days=w_info["date_offset"])).date()
+        w_dt = now - timedelta(days=w_info["date_offset"], hours=5)
+        woff, _ = WriteOff.objects.get_or_create(
+            reason=w_info["reason"],
+            date=w_date,
+            defaults={
+                'warehouse': w_info["wh"],
+                'note': f"{w_info['reason']} sababli hisobdan chiqarish"
+            }
+        )
+        woff.created_at = w_dt
+        woff.save(update_fields=['created_at'])
+
+        w_total = Decimal('0.0')
+        for r_name, q in w_info["items"]:
+            if r_name in saved_raw:
+                raw = saved_raw[r_name]
+                WriteOffItem.objects.get_or_create(
+                    write_off=woff,
+                    product=raw,
+                    defaults={'quantity': Decimal(str(q))}
+                )
+                w_total += Decimal(str(q * float(raw.purchase_price)))
+
+                InventoryStockHistory.objects.get_or_create(
+                    product=raw,
+                    reference_id=f"Chiqim #{woff.id}",
+                    defaults={
+                        'movement_type': 'out',
+                        'quantity': Decimal(str(q)),
+                        'previous_stock': raw.current_stock,
+                        'new_stock': max(Decimal('0.0'), raw.current_stock - Decimal(str(q))),
+                        'note': woff.reason
+                    }
+                )
+
+        woff.total_amount = w_total
+        woff.save(update_fields=['total_amount'])
+
     print("✅ Database seeding completed successfully!")
     print(f"   Admin Phone: 998774578407 (Password: 1447, PIN: 1447)")
     print(f"   Waiter Phone: 998901112233 (Password: 1234, PIN: 1234)")
     print(f"   Products: {Product.objects.count()} dishes, {InventoryProduct.objects.count()} inventory raw materials")
     print(f"   Tables: {Table.objects.count()} tables")
     print(f"   Sample Orders: {Order.objects.count()} orders with transactions")
+    print(f"   Purchases (Xaridlar): {Purchase.objects.count()} records")
+    print(f"   Realizations (Realizatsiyalar): {Realization.objects.count()} records")
+    print(f"   WriteOffs (Chiqimlar): {WriteOff.objects.count()} records")
+    print(f"   Stock Movements History: {InventoryStockHistory.objects.count()} logs")
 
 if __name__ == '__main__':
     seed()
+
