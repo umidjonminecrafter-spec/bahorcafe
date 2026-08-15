@@ -72,7 +72,7 @@ class TaxSettingsView(APIView):
             obj = TaxSettings.objects.create(
                 branch=branch,
                 tax_percent=0.0,
-                service_percent=10.0,
+                service_percent=0.0,
                 calculation_type='auto'
             )
         return obj

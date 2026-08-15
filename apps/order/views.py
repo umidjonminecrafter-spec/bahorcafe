@@ -147,10 +147,9 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         # Fetch service percent from TaxSettings if not provided
         branch_id = data.get('branch') or 1
-        if 'service_percent' not in data:
+        if 'service_percent' not in data or data['service_percent'] is None:
             tax_set = TaxSettings.objects.filter(branch_id=branch_id).first()
-            if tax_set:
-                data['service_percent'] = tax_set.service_percent
+            data['service_percent'] = tax_set.service_percent if tax_set else Decimal('0.0')
 
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)

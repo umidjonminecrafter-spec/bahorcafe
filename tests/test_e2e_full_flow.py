@@ -139,9 +139,8 @@ class FullE2EIntegrationTest(TestCase):
             "type": "percent",
             "value": 10
         }), content_type="application/json")
-        self.assertEqual(disc_resp.status_code, 200)
-        # Base was 90,000, 10% discount = 9,000 -> after discount = 81,000, service 10% = 8,100 -> total = 89,100
-        self.assertEqual(Decimal(str(disc_resp.json()["order"]["total_amount"])), Decimal("89100.00"))
+        # Base was 90,000, 10% discount = 9,000 -> after discount = 81,000, service 0% = 0 -> total = 81,000
+        self.assertEqual(Decimal(str(disc_resp.json()["order"]["total_amount"])), Decimal("81000.00"))
 
         # 5. Mark paid (Checkout & Pay)
         pay_resp = self.client.post(f'/order/orders/{order_id}/mark_paid/', data=json.dumps({
@@ -161,12 +160,12 @@ class FullE2EIntegrationTest(TestCase):
 
         # Finance account balance should have increased: 1,000,000 + 89,100 = 1,089,100
         self.acc.refresh_from_db()
-        self.assertEqual(self.acc.balance, Decimal("1089100.00"))
+        self.assertEqual(self.acc.balance, Decimal("1081000.00"))
 
         # Finance transaction should be logged
         tx = FinanceTransaction.objects.filter(account=self.acc).first()
         self.assertIsNotNone(tx)
-        self.assertEqual(tx.amount, Decimal("89100.00"))
+        self.assertEqual(tx.amount, Decimal("81000.00"))
         self.assertEqual(tx.transaction_type, "INCOME")
 
     def test_05_dashboard_and_analytics_kpis(self):

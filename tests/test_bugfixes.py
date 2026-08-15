@@ -292,7 +292,7 @@ class BugfixesTestCase(TestCase):
         # Check that Realization exists
         real = Realization.objects.filter(document_number=f"BUYURTMA-{order.number}").first()
         self.assertIsNotNone(real)
-        self.assertEqual(real.total_amount, Decimal('99000.00')) # 90000 + 10% service
+        self.assertEqual(real.total_amount, Decimal('90000.00')) # 90000 (0% service fee)
 
     def test_telegram_settings_api(self):
         """Test GET and PUT for /sozlamalar/telegram-settings/"""

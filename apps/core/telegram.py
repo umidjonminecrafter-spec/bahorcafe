@@ -547,3 +547,34 @@ def process_telegram_update(update):
     send_telegram_reply(chat_id, msg)
     return {"ok": True, "status": "default_reply"}
 
+_scheduler_started = False
+
+def start_daily_report_scheduler():
+    """
+    Background daemon scheduler that sends daily summary report automatically every day at 20:00.
+    """
+    global _scheduler_started
+    if _scheduler_started:
+        return
+    _scheduler_started = True
+
+    import time
+
+    def loop():
+        last_sent_date = None
+        while True:
+            try:
+                now = timezone.localtime(timezone.now())
+                if now.hour == 20 and now.minute == 0 and last_sent_date != now.date():
+                    logger.info(f"Triggering automatic 20:00 daily report for {now.date()}")
+                    send_daily_summary_report(target_date=now.date(), async_send=False)
+                    last_sent_date = now.date()
+            except Exception as e:
+                logger.warning(f"Daily report scheduler error: {e}")
+            time.sleep(25)
+
+    t = threading.Thread(target=loop, daemon=True, name="DailyReportScheduler")
+    t.start()
+    logger.info("Daily report 20:00 background scheduler started.")
+
+

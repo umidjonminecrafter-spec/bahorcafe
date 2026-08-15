@@ -39,7 +39,7 @@ class TaxSettings(TimeStampedModel):
     )
     branch = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name='tax_settings', null=True, blank=True)
     tax_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0.0)
-    service_percent = models.DecimalField(max_digits=5, decimal_places=2, default=10.0)
+    service_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0.0)
     calculation_type = models.CharField(max_length=20, choices=CALC_CHOICES, default='auto')
 
     class Meta:

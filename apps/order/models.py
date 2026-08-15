@@ -42,7 +42,7 @@ class Order(TimeStampedModel):
     discount_type = models.CharField(max_length=20, default='percent') # 'percent' or 'fixed'
     discount_value = models.DecimalField(max_digits=10, decimal_places=2, default=0.0)
     discount_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0.0)
-    service_percent = models.DecimalField(max_digits=5, decimal_places=2, default=10.0)
+    service_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0.0)
     service_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0.0)
     total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0.0)
     
