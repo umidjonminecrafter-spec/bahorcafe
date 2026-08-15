@@ -215,6 +215,52 @@ class OrderViewSet(viewsets.ModelViewSet):
             "order": self.get_serializer(order).data
         })
 
+    @action(detail=True, methods=['post'], url_path='cancel')
+    @transaction.atomic
+    def cancel_order(self, request, pk=None):
+        order = self.get_object()
+        reason = request.data.get('reason') or request.data.get('notes') or request.data.get('sabab') or "Mijoz rad etdi"
+        employee_name = request.data.get('employee_name') or (request.user.username if request.user.is_authenticated else None)
+
+        order.status = 'cancelled'
+        order.save(update_fields=['status', 'updated_at'])
+        order.items.filter(status__in=['pending', 'cooking', 'ready']).update(status='cancelled')
+
+        if order.table:
+            order.table.status = 'free'
+            order.table.is_busy = False
+            order.table.save(update_fields=['status', 'is_busy', 'updated_at'])
+
+        # Send Telegram Cancelled Notification
+        try:
+            from apps.core.telegram import send_order_cancelled_alert
+            send_order_cancelled_alert(order, reason=reason, employee_name=employee_name)
+        except Exception as ex:
+            logger.warning(f"Telegram cancel notification error: {ex}")
+
+        return Response({
+            "status": "success",
+            "message": f"Buyurtma #{order.number or order.id} bekor qilindi",
+            "order": self.get_serializer(order).data
+        })
+
+    def perform_update(self, serializer):
+        old_status = serializer.instance.status if serializer.instance else None
+        order = serializer.save()
+        new_status = order.status
+
+        # If order was changed to cancelled
+        if old_status not in ['cancelled', 'canceled'] and new_status in ['cancelled', 'canceled']:
+            if order.table:
+                order.table.status = 'free'
+                order.table.is_busy = False
+                order.table.save(update_fields=['status', 'is_busy', 'updated_at'])
+            try:
+                from apps.core.telegram import send_order_cancelled_alert
+                send_order_cancelled_alert(order, reason="Holati bekor qilindi ga o'zgartirildi")
+            except Exception as ex:
+                logger.warning(f"Telegram cancel alert error on update: {ex}")
+
     @action(detail=True, methods=['post'], url_path='mark_paid')
     @transaction.atomic
     def mark_paid(self, request, pk=None):
@@ -343,6 +389,13 @@ class OrderViewSet(viewsets.ModelViewSet):
         )
 
         logger.info(f"Buyurtma #{order.number or order.id} to'landi. Summa: {order.total_amount} UZS, To'lov turi: {payment_type}")
+
+        # Send Telegram Receipt Notification
+        try:
+            from apps.core.telegram import send_order_paid_receipt
+            send_order_paid_receipt(order)
+        except Exception as ex:
+            logger.warning(f"Telegram receipt notification error: {ex}")
 
         return Response({
             "status": "success",

@@ -39,6 +39,7 @@ class Employee(TimeStampedModel):
     branch = models.ForeignKey(Branch, on_delete=models.SET_NULL, null=True, blank=True, related_name='employees')
     quick_pin = models.CharField(max_length=128, blank=True, default="") # hashed 4-digit PIN
     pin_is_set = models.BooleanField(default=False)
+    telegram_chat_id = models.CharField(max_length=100, blank=True, default="")
     is_active = models.BooleanField(default=True)
     last_login = models.DateTimeField(null=True, blank=True)
 

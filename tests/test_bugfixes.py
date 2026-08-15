@@ -1,11 +1,12 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 from django.contrib.auth.models import User
+from django.utils import timezone
 from decimal import Decimal
 import os
 
 from apps.employee.models import Employee, Role
-from apps.sozlamalar.models import Branch, OrderFlowSettings
+from apps.sozlamalar.models import Branch, OrderFlowSettings, TelegramBotSettings
 from apps.table.models import Table, Product, ProductIngredient
 from apps.order.models import Order, OrderItem
 from apps.finance.models import FinanceAccount, FinanceCategory, FinanceTransaction
@@ -292,4 +293,122 @@ class BugfixesTestCase(TestCase):
         real = Realization.objects.filter(document_number=f"BUYURTMA-{order.number}").first()
         self.assertIsNotNone(real)
         self.assertEqual(real.total_amount, Decimal('99000.00')) # 90000 + 10% service
+
+    def test_telegram_settings_api(self):
+        """Test GET and PUT for /sozlamalar/telegram-settings/"""
+        # GET
+        res_get = self.client.get('/sozlamalar/telegram-settings/')
+        self.assertEqual(res_get.status_code, 200)
+        self.assertIn('bot_token', res_get.data)
+        self.assertIn('chat_id', res_get.data)
+
+        # PUT
+        res_put = self.client.put('/sozlamalar/telegram-settings/', {
+            'bot_token': '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
+            'chat_id': '-1001234567890',
+            'is_active': True,
+            'notify_order_paid': True,
+            'notify_order_cancelled': True,
+            'notify_daily_report': True
+        }, format='json')
+        self.assertEqual(res_put.status_code, 200)
+        self.assertEqual(res_put.data['bot_token'], '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11')
+        self.assertEqual(res_put.data['chat_id'], '-1001234567890')
+
+    def test_order_cancel_action(self):
+        """Test cancelling order via /order/orders/{id}/cancel/"""
+        order = Order.objects.create(
+            branch=self.branch,
+            table=self.table,
+            assigned_waiter=self.employee,
+            status='open',
+            number=8888
+        )
+        self.table.status = 'busy'
+        self.table.save()
+
+        res_cancel = self.client.post(f'/order/orders/{order.id}/cancel/', {
+            'reason': 'Mijoz shoshilayotgan ekan'
+        }, format='json')
+        self.assertEqual(res_cancel.status_code, 200)
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'cancelled')
+        self.table.refresh_from_db()
+        self.assertEqual(self.table.status, 'free')
+
+    def test_telegram_daily_report_generation(self):
+        """Test daily summary generation logic"""
+        from apps.core.telegram import send_daily_summary_report
+        # Create a paid order
+        order = Order.objects.create(
+            branch=self.branch,
+            table=self.table,
+            assigned_waiter=self.employee,
+            status='paid',
+            payment_type='cash',
+            total_amount=Decimal('150000.0'),
+            number=7777
+        )
+        OrderItem.objects.create(order=order, product=self.product, qty=Decimal('3.0'), unit_price=Decimal('50000.0'), total_price=Decimal('150000.0'))
+
+        ok, report = send_daily_summary_report(branch=self.branch, target_date=timezone.localdate(), async_send=False)
+        self.assertIn('total_revenue', report)
+        self.assertGreaterEqual(report['total_revenue'], 150000.0)
+        self.assertGreaterEqual(report['paid_count'], 1)
+
+    def test_telegram_phone_auth_flow(self):
+        """Test user sends /start then sends phone contact to authorize"""
+        from apps.core.telegram import process_telegram_update
+        
+        # 1. User sends /start
+        up1 = {
+            "update_id": 1001,
+            "message": {
+                "message_id": 1,
+                "from": {"id": 99887766, "first_name": "Umidjon"},
+                "chat": {"id": 99887766, "type": "private"},
+                "text": "/start"
+            }
+        }
+        res1 = process_telegram_update(up1)
+        self.assertEqual(res1.get('status'), 'start_processed')
+
+        # 2. User shares contact
+        up2 = {
+            "update_id": 1002,
+            "message": {
+                "message_id": 2,
+                "from": {"id": 99887766, "first_name": "Umidjon"},
+                "chat": {"id": 99887766, "type": "private"},
+                "contact": {
+                    "phone_number": "+998901112233",
+                    "first_name": "Umidjon"
+                }
+            }
+        }
+        res2 = process_telegram_update(up2)
+        self.assertEqual(res2.get('status'), 'authorized')
+
+        # Check DB linked
+        self.employee.refresh_from_db()
+        self.assertEqual(self.employee.telegram_chat_id, "99887766")
+        bot_set = TelegramBotSettings.objects.first()
+        self.assertIn("99887766", bot_set.chat_id)
+
+    def test_telegram_webhook_endpoint(self):
+        """Test POST /sozlamalar/telegram-webhook/"""
+        res = self.client.post('/sozlamalar/telegram-webhook/', {
+            "update_id": 2001,
+            "message": {
+                "message_id": 5,
+                "from": {"id": 12345, "first_name": "Test"},
+                "chat": {"id": 12345, "type": "private"},
+                "text": "/start"
+            }
+        }, format='json')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data.get('status'), 'start_processed')
+
+
 

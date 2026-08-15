@@ -86,3 +86,21 @@ class OrderFlowSettings(TimeStampedModel):
 
     def __str__(self):
         return f"Order Flow ({self.branch.name if self.branch else 'Global'})"
+
+class TelegramBotSettings(TimeStampedModel):
+    branch = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name='telegram_settings', null=True, blank=True)
+    bot_token = models.CharField(max_length=255, blank=True, default="")
+    chat_id = models.CharField(max_length=255, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    notify_order_paid = models.BooleanField(default=True, verbose_name="To'lov bo'lganda chek yuborish")
+    notify_order_cancelled = models.BooleanField(default=True, verbose_name="Bekor qilingan buyurtma xabari")
+    notify_daily_report = models.BooleanField(default=True, verbose_name="Kunlik hisobot yuborish")
+    daily_report_time = models.CharField(max_length=10, default="20:00")
+
+    class Meta:
+        verbose_name = "Telegram Bot Settings"
+        verbose_name_plural = "Telegram Bot Settings"
+
+    def __str__(self):
+        return f"Telegram Bot ({self.chat_id or 'No Chat ID'})"
+

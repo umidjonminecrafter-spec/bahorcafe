@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Branch, RestaurantSettings, TaxSettings, ReceiptSettings, OrderFlowSettings
+from .models import Branch, RestaurantSettings, TaxSettings, ReceiptSettings, OrderFlowSettings, TelegramBotSettings
 
 class BranchSerializer(serializers.ModelSerializer):
     class Meta:
@@ -31,3 +31,9 @@ class OrderFlowSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderFlowSettings
         fields = ['id', 'branch', 'auto_kitchen', 'autoKitchen', 'signal', 'bill_btn', 'billBtn', 'served', 'created_at', 'updated_at']
+
+class TelegramBotSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TelegramBotSettings
+        fields = '__all__'
+

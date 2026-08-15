@@ -203,3 +203,12 @@ LOGGING = {
     },
 }
 
+# Telegram Bot Notification Settings
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8913316198:AAG_KhqlTjdkzHyX3ErNzq09vsjJY6_8rlU')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+TELEGRAM_NOTIFY_PAID = True
+TELEGRAM_NOTIFY_CANCELLED = True
+TELEGRAM_NOTIFY_DAILY = True
+
+
+
