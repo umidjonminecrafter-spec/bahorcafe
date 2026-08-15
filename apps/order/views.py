@@ -249,6 +249,18 @@ class OrderViewSet(viewsets.ModelViewSet):
         order = serializer.save()
         new_status = order.status
 
+        # If order was changed to paid
+        if old_status != 'paid' and new_status == 'paid':
+            if order.table:
+                order.table.status = 'free'
+                order.table.is_busy = False
+                order.table.save(update_fields=['status', 'is_busy', 'updated_at'])
+            try:
+                from apps.core.telegram import send_order_paid_receipt
+                send_order_paid_receipt(order)
+            except Exception as ex:
+                logger.warning(f"Telegram receipt alert error on update: {ex}")
+
         # If order was changed to cancelled
         if old_status not in ['cancelled', 'canceled'] and new_status in ['cancelled', 'canceled']:
             if order.table:
@@ -260,6 +272,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 send_order_cancelled_alert(order, reason="Holati bekor qilindi ga o'zgartirildi")
             except Exception as ex:
                 logger.warning(f"Telegram cancel alert error on update: {ex}")
+
 
     @action(detail=True, methods=['post'], url_path='mark_paid')
     @transaction.atomic
