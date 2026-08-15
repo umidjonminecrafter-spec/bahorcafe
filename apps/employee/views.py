@@ -296,36 +296,48 @@ class SalarySimulateView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        salary_type = request.data.get('type')
+        salary_type = request.data.get('type') or request.data.get('salary_type') or 'fiksa'
         params = request.data.get('params') or {}
         metrics = request.data.get('metrics') or {}
 
-        orders_total = Decimal(str(metrics.get('ordersTotal', 0) or 0))
-        hours_worked = Decimal(str(metrics.get('hoursWorked', 0) or 0))
-        shifts_count = Decimal(str(metrics.get('shiftsCount', 0) or 0))
+        def clean_dec(val, default=0):
+            if val is None or val == '':
+                return Decimal(str(default))
+            if isinstance(val, (int, float, Decimal)):
+                return Decimal(str(val))
+            s = str(val).replace(' ', '').replace(',', '.').replace("so'm", '').replace('UZS', '').strip()
+            try:
+                return Decimal(s)
+            except Exception:
+                return Decimal(str(default))
+
+        orders_total = clean_dec(metrics.get('ordersTotal') or metrics.get('orders_total'), 0)
+        hours_worked = clean_dec(metrics.get('hoursWorked') or metrics.get('hours_worked'), 0)
+        shifts_count = clean_dec(metrics.get('shiftsCount') or metrics.get('shifts_count'), 0)
 
         calculated = Decimal('0.0')
 
-        if salary_type == 'fiksa':
-            calculated = Decimal(str(params.get('summa', 0) or 0))
-        elif salary_type == 'foizli':
-            foiz = Decimal(str(params.get('foiz', 0) or 0))
+        if salary_type in ['fiksa', 'fixed', 'monthly']:
+            summa = clean_dec(params.get('summa') or params.get('salary_amount') or params.get('amount') or params.get('baza_summa'))
+            calculated = summa
+        elif salary_type in ['foizli', 'percentage', 'percent']:
+            foiz = clean_dec(params.get('foiz') or params.get('percent') or params.get('rate'))
             calculated = (orders_total * foiz / Decimal('100'))
-        elif salary_type == 'soatlik':
-            stavka = Decimal(str(params.get('stavka', 0) or 0))
+        elif salary_type in ['soatlik', 'hourly']:
+            stavka = clean_dec(params.get('stavka') or params.get('hourly_rate') or params.get('soat_narxi'))
             calculated = hours_worked * stavka
-        elif salary_type == 'fiksa_foiz':
-            baza = Decimal(str(params.get('baza_summa', 0) or 0))
-            foiz = Decimal(str(params.get('qoshimcha_foiz', 0) or 0))
+        elif salary_type in ['fiksa_foiz', 'mixed', 'fixed_percent']:
+            baza = clean_dec(params.get('baza_summa') or params.get('summa') or params.get('base_amount'))
+            foiz = clean_dec(params.get('qoshimcha_foiz') or params.get('foiz') or params.get('percent'))
             calculated = baza + (orders_total * foiz / Decimal('100'))
-        elif salary_type == 'smena':
-            smena_narxi = Decimal(str(params.get('smena_narxi', 0) or 0))
+        elif salary_type in ['smena', 'shift', 'kunlik']:
+            smena_narxi = clean_dec(params.get('smena_narxi') or params.get('shift_rate') or params.get('kunlik'))
             calculated = shifts_count * smena_narxi
         elif salary_type == 'ball':
-            ball_qiymati = Decimal(str(params.get('ball_qiymati', 1) or 1))
-            bazaviy_ball = Decimal(str(params.get('bazaviy_ball', 0) or 0))
-            bazaviy_summa = Decimal(str(params.get('bazaviy_summa', 0) or 0))
-            bonus_bir_ball = Decimal(str(params.get('bonus_bir_ball', 0) or 0))
+            ball_qiymati = clean_dec(params.get('ball_qiymati'), 1)
+            bazaviy_ball = clean_dec(params.get('bazaviy_ball'), 0)
+            bazaviy_summa = clean_dec(params.get('bazaviy_summa'), 0)
+            bonus_bir_ball = clean_dec(params.get('bonus_bir_ball'), 0)
 
             if ball_qiymati > 0:
                 jami_ball = int(orders_total // ball_qiymati)
@@ -343,3 +355,4 @@ class SalarySimulateView(APIView):
             "params": params,
             "metrics": metrics
         })
+

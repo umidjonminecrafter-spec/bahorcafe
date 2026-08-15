@@ -455,6 +455,54 @@ class BugfixesTestCase(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data.get('status'), 'start_processed')
 
+    def test_salary_simulation_models(self):
+        """Test calculation formulas for Fiksa, Smena, Foizli, Fiksa+Foiz, Soatlik"""
+        # 1. Fiksa (4,000,000)
+        res1 = self.client.post('/employee/salary/simulate/', {
+            "type": "fiksa",
+            "params": {"summa": "4 000 000"},
+            "metrics": {}
+        }, format='json')
+        self.assertEqual(res1.status_code, 200)
+        self.assertEqual(res1.data['calculated_amount'], 4000000)
+
+        # 2. Smena (200,000 x 22 smena = 4,400,000)
+        res2 = self.client.post('/employee/salary/simulate/', {
+            "type": "smena",
+            "params": {"smena_narxi": "200 000"},
+            "metrics": {"shiftsCount": "22"}
+        }, format='json')
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res2.data['calculated_amount'], 4400000)
+
+        # 3. Foizli (50,000,000 x 5% = 2,500,000)
+        res3 = self.client.post('/employee/salary/simulate/', {
+            "type": "foizli",
+            "params": {"foiz": "5"},
+            "metrics": {"ordersTotal": "50 000 000"}
+        }, format='json')
+        self.assertEqual(res3.status_code, 200)
+        self.assertEqual(res3.data['calculated_amount'], 2500000)
+
+        # 4. Fiksa + Foiz (2,000,000 + 40,000,000 x 3% = 3,200,000)
+        res4 = self.client.post('/employee/salary/simulate/', {
+            "type": "fiksa_foiz",
+            "params": {"baza_summa": "2 000 000", "qoshimcha_foiz": "3"},
+            "metrics": {"ordersTotal": "40 000 000"}
+        }, format='json')
+        self.assertEqual(res4.status_code, 200)
+        self.assertEqual(res4.data['calculated_amount'], 3200000)
+
+        # 5. Soatlik (20,000 x 160 soat = 3,200,000)
+        res5 = self.client.post('/employee/salary/simulate/', {
+            "type": "soatlik",
+            "params": {"stavka": "20 000"},
+            "metrics": {"hoursWorked": "160"}
+        }, format='json')
+        self.assertEqual(res5.status_code, 200)
+        self.assertEqual(res5.data['calculated_amount'], 3200000)
+
+
 
 
 
