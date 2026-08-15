@@ -396,6 +396,51 @@ class BugfixesTestCase(TestCase):
         bot_set = TelegramBotSettings.objects.first()
         self.assertIn("99887766", bot_set.chat_id)
 
+    def test_telegram_non_admin_rejected(self):
+        """Test non-admin employee (e.g. Waiter) is rejected when trying to link bot"""
+        from apps.core.telegram import process_telegram_update
+        waiter_role = Role.objects.create(name="WAITER")
+        waiter = Employee.objects.create(
+            name="Oddiy Ofitsiant",
+            phone="998935554433",
+            role=waiter_role,
+            branch=self.branch
+        )
+        up = {
+            "update_id": 1003,
+            "message": {
+                "message_id": 3,
+                "from": {"id": 11223344, "first_name": "Ofitsiant"},
+                "chat": {"id": 11223344, "type": "private"},
+                "contact": {
+                    "phone_number": "+998935554433",
+                    "first_name": "Ofitsiant"
+                }
+            }
+        }
+        res = process_telegram_update(up)
+        self.assertEqual(res.get('status'), 'forbidden')
+        waiter.refresh_from_db()
+        self.assertEqual(waiter.telegram_chat_id, "")
+
+    def test_telegram_stranger_rejected(self):
+        """Test random stranger phone is rejected"""
+        from apps.core.telegram import process_telegram_update
+        up = {
+            "update_id": 1004,
+            "message": {
+                "message_id": 4,
+                "from": {"id": 55667788, "first_name": "Stranger"},
+                "chat": {"id": 55667788, "type": "private"},
+                "contact": {
+                    "phone_number": "+998990009988",
+                    "first_name": "Stranger"
+                }
+            }
+        }
+        res = process_telegram_update(up)
+        self.assertEqual(res.get('status'), 'forbidden')
+
     def test_telegram_webhook_endpoint(self):
         """Test POST /sozlamalar/telegram-webhook/"""
         res = self.client.post('/sozlamalar/telegram-webhook/', {
@@ -409,6 +454,7 @@ class BugfixesTestCase(TestCase):
         }, format='json')
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data.get('status'), 'start_processed')
+
 
 
 

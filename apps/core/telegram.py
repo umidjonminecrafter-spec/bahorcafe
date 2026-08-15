@@ -411,10 +411,47 @@ def send_telegram_reply(chat_id, text, reply_markup=None, bot_token=None):
         logger.warning(f"Error in send_telegram_reply: {e}")
         return False
 
+def is_admin_employee(emp):
+    """
+    Checks if an employee has administrator / manager privileges.
+    """
+    if not emp:
+        return False
+    if emp.user and (emp.user.is_superuser or emp.user.is_staff):
+        return True
+    if emp.role and emp.role.name:
+        r_name = emp.role.name.upper()
+        if any(adm in r_name for adm in ['ADMIN', 'BOSHQARUVCHI', 'DIREKTOR', 'MANAGER', 'DIRECTOR', 'OWNER', 'EGA']):
+            return True
+    if hasattr(emp, 'role_name') and emp.role_name:
+        r_name = emp.role_name.upper()
+        if any(adm in r_name for adm in ['ADMIN', 'BOSHQARUVCHI', 'DIREKTOR', 'MANAGER', 'DIRECTOR', 'OWNER', 'EGA']):
+            return True
+    return False
+
+def is_chat_admin(chat_id):
+    """
+    Checks if a telegram chat_id belongs to an authorized admin.
+    """
+    from apps.employee.models import Employee
+    from apps.sozlamalar.models import TelegramBotSettings
+    if not chat_id:
+        return False
+    chat_str = str(chat_id).strip()
+    emp = Employee.objects.filter(telegram_chat_id=chat_str).first()
+    if emp and is_admin_employee(emp):
+        return True
+    bot_settings = TelegramBotSettings.objects.first()
+    if bot_settings and bot_settings.chat_id:
+        admin_ids = [c.strip() for c in bot_settings.chat_id.split(',') if c.strip()]
+        if chat_str in admin_ids:
+            return True
+    return False
+
 def process_telegram_update(update):
     """
-    Processes incoming webhook or long polling Telegram update.
-    Identifies user phone, links admin, and responds to commands.
+    Processes an incoming Telegram webhook update or long-poll message.
+    Strictly verifies that only system admins/managers are authorized.
     """
     import re
     from apps.employee.models import Employee
@@ -425,8 +462,7 @@ def process_telegram_update(update):
     if not message:
         return {"ok": True, "status": "no_message"}
 
-    chat = message.get('chat', {})
-    chat_id = str(chat.get('id', ''))
+    chat_id = str(message.get('chat', {}).get('id', ''))
     from_user = message.get('from', {})
     first_name = from_user.get('first_name', 'Foydalanuvchi')
     text = (message.get('text') or '').strip()
@@ -443,12 +479,26 @@ def process_telegram_update(update):
 
         # Find employee in database
         emp = Employee.objects.filter(phone__endswith=last_9).first()
-        
+
+        # Check if this phone belongs to an Admin
+        if not emp or not is_admin_employee(emp):
+            reject_msg = (
+                f"❌ <b>Ruxsat berilmadi!</b>\n\n"
+                f"Kechirasiz, <b>+{clean_phone}</b> raqami tizimda <b>Administrator</b> sifatida ro'yxatdan o'tmagan.\n\n"
+                f"⚠️ Ushbu bot va kassa hisobotlari faqat restoran egasi hamda boshqaruvchilari uchun mo'ljallangan."
+            )
+            send_telegram_reply(chat_id, reject_msg, reply_markup={"remove_keyboard": True})
+            return {"ok": False, "status": "forbidden"}
+
+        # Link chat_id to Admin Employee
+        emp.telegram_chat_id = chat_id
+        emp.save(update_fields=['telegram_chat_id', 'updated_at'])
+
         # Link chat_id to TelegramBotSettings
         bot_settings = TelegramBotSettings.objects.first()
         if not bot_settings:
             bot_settings = TelegramBotSettings.objects.create(
-                branch=Branch.objects.first(),
+                branch=emp.branch or Branch.objects.first(),
                 chat_id=chat_id,
                 is_active=True
             )
@@ -460,58 +510,38 @@ def process_telegram_update(update):
             bot_settings.is_active = True
             bot_settings.save(update_fields=['chat_id', 'is_active', 'updated_at'])
 
-        if emp:
-            emp.telegram_chat_id = chat_id
-            emp.save(update_fields=['telegram_chat_id', 'updated_at'])
-            role_title = emp.role.name if emp.role else "Xodim"
-            branch_title = emp.branch.name if emp.branch else "Bahor Cafe"
+        role_title = emp.role.name if emp.role else "Administrator"
+        branch_title = emp.branch.name if emp.branch else "Bahor Cafe"
 
-            welcome_msg = (
-                f"✅ <b>Assalomu alaykum, {emp.name}!</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 <b>Foydalanuvchi:</b> {emp.name}\n"
-                f"💼 <b>Lavozim:</b> {role_title}\n"
-                f"📱 <b>Telefon:</b> +{clean_phone}\n"
-                f"🏢 <b>Filial:</b> {branch_title}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎉 <b>Siz tizimga muvaffaqiyatli ulandingiz!</b>\n\n"
-                f"📌 <b>Endi botingizga:</b>\n"
-                f"• 🧾 Kassada to'langan har bir buyurtma cheki\n"
-                f"• ⚠️ Bekor qilingan buyurtmalar\n"
-                f"• 📊 Har kungi kunlik yakuniy hisobot\n"
-                f"to'g'ridan-to'g'ri avtomatik kelib turadi.\n\n"
-                f"<i>Buyruqlar:</i>\n"
-                f"/hisobot — Bugungi hisobotni olish\n"
-                f"/stats — Jonli kassa holati"
-            )
-        else:
-            welcome_msg = (
-                f"✅ <b>Assalomu alaykum, {first_name}!</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"📱 <b>Telefoningiz:</b> +{clean_phone}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎉 <b>Siz Bahor Cafe tizimiga muvaffaqiyatli ulandingiz!</b>\n\n"
-                f"📌 Barcha to'lov cheklari va kunlik hisobotlar ushbu botga keladi.\n\n"
-                f"<i>Buyruqlar:</i>\n"
-                f"/hisobot — Bugungi hisobotni olish\n"
-                f"/stats — Jonli kassa holati"
-            )
-
+        welcome_msg = (
+            f"✅ <b>Assalomu alaykum, {emp.name}!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Foydalanuvchi:</b> {emp.name}\n"
+            f"💼 <b>Lavozim:</b> {role_title}\n"
+            f"📱 <b>Telefon:</b> +{clean_phone}\n"
+            f"🏢 <b>Filial:</b> {branch_title}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎉 <b>Administratorlik profilingiz muvaffaqiyatli tasdiqlandi!</b>\n\n"
+            f"📌 <b>Endi botingizga:</b>\n"
+            f"• 🧾 Kassada to'langan har bir buyurtma cheki\n"
+            f"• ⚠️ Bekor qilingan buyurtmalar\n"
+            f"• 📊 Har kuni soat 20:00 da kunlik hisobot\n"
+            f"to'g'ridan-to'g'ri avtomatik keladi.\n\n"
+            f"<i>Mavjud buyruqlar:</i>\n"
+            f"/hisobot — Bugungi hisobotni olish\n"
+            f"/stats — Jonli kassa holati"
+        )
         send_telegram_reply(chat_id, welcome_msg, reply_markup={"remove_keyboard": True})
         return {"ok": True, "status": "authorized"}
 
     # 2. Text command /start
     if text.startswith('/start'):
-        # Check if already registered
-        emp = Employee.objects.filter(telegram_chat_id=chat_id).first()
-        bot_settings = TelegramBotSettings.objects.first()
-        is_registered = (emp is not None) or (bot_settings and chat_id in bot_settings.chat_id)
-
-        if is_registered:
+        if is_chat_admin(chat_id):
+            emp = Employee.objects.filter(telegram_chat_id=chat_id).first()
             name_label = emp.name if emp else first_name
             msg = (
                 f"👋 <b>Assalomu alaykum, {name_label}!</b>\n\n"
-                f"Siz avval tizimga ulangansiz. Barcha cheklar va hisobotlar ushbu chatga kelmoqda.\n\n"
+                f"Siz tizim administratori sifatida ulangansiz. Barcha cheklar va hisobotlar ushbu chatga kelmoqda.\n\n"
                 f"<i>Mavjud buyruqlar:</i>\n"
                 f"/hisobot — Bugungi kunlik hisobotni olish\n"
                 f"/stats — Jonli kassa statistikasi"
@@ -534,12 +564,22 @@ def process_telegram_update(update):
 
         return {"ok": True, "status": "start_processed"}
 
-    # 3. /hisobot command
+    # 3. Security check for any other commands (/hisobot, /stats, etc.)
+    if not is_chat_admin(chat_id):
+        forbidden_msg = (
+            f"❌ <b>Kechirasiz, siz tizim administratori emassiz!</b>\n\n"
+            f"Ushbu bot faqat restoran administratori va rahbarlari uchun mo'ljallangan.\n"
+            f"Iltimos, avval /start buyrug'ini yuboring va admin telefon raqamini tasdiqlang."
+        )
+        send_telegram_reply(chat_id, forbidden_msg)
+        return {"ok": False, "status": "forbidden"}
+
+    # 4. /hisobot command (Admin only)
     if text.startswith('/hisobot') or text.lower() == 'hisobot':
         send_daily_summary_report(async_send=False)
         return {"ok": True, "status": "hisobot_sent"}
 
-    # 4. /stats command
+    # 5. /stats command (Admin only)
     if text.startswith('/stats') or text.lower() == 'statistika':
         today = timezone.localdate()
         today_orders = Order.objects.filter(created_at__date=today)
@@ -561,7 +601,7 @@ def process_telegram_update(update):
         send_telegram_reply(chat_id, msg)
         return {"ok": True, "status": "stats_sent"}
 
-    # Default fallback
+    # Default fallback (Admin only)
     msg = (
         f"🤖 <b>Bahor Cafe Bot</b>\n\n"
         f"Mavjud buyruqlar:\n"
