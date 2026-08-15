@@ -151,9 +151,22 @@ def send_order_paid_receipt(order):
         location = "📍 <b>Joylashuv:</b> Zal"
 
     waiter_name = order.assigned_waiter.name if order.assigned_waiter else "Kassa"
-    pay_type_uz = "💵 Naqd pul" if order.payment_type == 'cash' else "💳 Karta / Terminal"
-    if order.cash_amount > 0 and order.card_amount > 0:
-        pay_type_uz = f"💵 Naqd: {format_uzs(order.cash_amount)} + 💳 Karta: {format_uzs(order.card_amount)}"
+    
+    cash_val = Decimal(str(order.cash_amount or 0))
+    card_val = Decimal(str(order.card_amount or 0))
+    tot_val = Decimal(str(order.total_amount or 0))
+
+    if cash_val > 0 and card_val > 0:
+        pay_type_uz = "🔀 Aralash (Naqd + Karta)"
+    elif card_val > 0 and cash_val == 0:
+        pay_type_uz = "💳 Karta / Terminal"
+    elif order.payment_type in ['card', 'terminal']:
+        pay_type_uz = "💳 Karta / Terminal"
+        card_val = tot_val
+    else:
+        pay_type_uz = "💵 Naqd pul"
+        if cash_val == 0 and card_val == 0:
+            cash_val = tot_val
 
     paid_time = timezone.localtime(order.paid_at or timezone.now()).strftime("%d.%m.%Y %H:%M")
 
@@ -180,6 +193,18 @@ def send_order_paid_receipt(order):
         calc_lines.append(f"🎁 <b>Chegirma:</b> -{discount_str}")
     if order.service_amount and order.service_amount > 0:
         calc_lines.append(f"🏷 <b>Xizmat haqi ({order.service_percent}%):</b> +{service_str}")
+    
+    calc_lines.append(f"💰 <b>JAMI TO'LANDI: {total_str}</b>")
+    
+    # Split payment details breakdown
+    if cash_val > 0 and card_val > 0:
+        calc_lines.append(f"  💵 <b>Naqd:</b> {format_uzs(cash_val)}")
+        calc_lines.append(f"  💳 <b>Karta:</b> {format_uzs(card_val)}")
+    elif card_val > 0:
+        calc_lines.append(f"  💳 <b>Karta orqali:</b> {format_uzs(card_val)}")
+    elif cash_val > 0:
+        calc_lines.append(f"  💵 <b>Naqd pul:</b> {format_uzs(cash_val)}")
+
     calc_block = "\n".join(calc_lines)
 
     msg = (
@@ -188,19 +213,19 @@ def send_order_paid_receipt(order):
         f"🏢 <b>Filial:</b> {branch_name}\n"
         f"{location}\n"
         f"👤 <b>Xodim:</b> {waiter_name}\n"
-        f"💳 <b>To'lov:</b> {pay_type_uz}\n"
+        f"💳 <b>To'lov turi:</b> {pay_type_uz}\n"
         f"🕒 <b>Vaqt:</b> {paid_time}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<b>🍽 Buyurtma tarkibi:</b>\n"
         f"{items_block}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{calc_block}\n"
-        f"💰 <b>JAMI TO'LANDI: {total_str}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>✨ Xaridingiz uchun rahmat!</i>"
     )
 
     return send_telegram_message(msg, async_send=True)
+
 
 def send_order_cancelled_alert(order, reason=None, employee_name=None):
     """

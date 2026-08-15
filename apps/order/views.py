@@ -277,14 +277,31 @@ class OrderViewSet(viewsets.ModelViewSet):
     @transaction.atomic
     def mark_paid(self, request, pk=None):
         order = self.get_object()
-        payment_type = request.data.get('payment_type') or request.data.get('payment_method') or 'cash'
+        raw_pay_type = request.data.get('payment_type') or request.data.get('payment_method') or 'cash'
+        payment_type = str(raw_pay_type).lower() if raw_pay_type else 'cash'
         cash_amt = Decimal(str(request.data.get('cash_amount', 0) or 0))
         card_amt = Decimal(str(request.data.get('card_amount', 0) or 0))
 
-        if payment_type == 'cash' and cash_amt == 0:
-            cash_amt = order.total_amount
-        elif payment_type == 'card' and card_amt == 0:
-            card_amt = order.total_amount
+        if cash_amt > 0 and card_amt > 0:
+            payment_type = 'mixed'
+        elif cash_amt > 0 and card_amt == 0 and payment_type not in ['card', 'terminal']:
+            payment_type = 'cash'
+        elif card_amt > 0 and cash_amt == 0 and payment_type != 'cash':
+            payment_type = 'card'
+        else:
+            if payment_type == 'cash' and cash_amt == 0 and card_amt == 0:
+                cash_amt = order.total_amount
+                card_amt = Decimal('0.0')
+            elif payment_type in ['card', 'terminal'] and card_amt == 0 and cash_amt == 0:
+                payment_type = 'card'
+                card_amt = order.total_amount
+                cash_amt = Decimal('0.0')
+            elif payment_type in ['mixed', 'aralash']:
+                if cash_amt > 0 and card_amt == 0:
+                    card_amt = max(Decimal('0.0'), order.total_amount - cash_amt)
+                elif card_amt > 0 and cash_amt == 0:
+                    cash_amt = max(Decimal('0.0'), order.total_amount - card_amt)
+
 
         order.status = 'paid'
         order.payment_type = payment_type
