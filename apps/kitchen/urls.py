@@ -13,6 +13,7 @@ from .views import (
     XodimlarHisobotiView,
     AbcAnalysisView
 )
+from apps.table.views import ExcelMenuImportView
 
 router = DefaultRouter()
 router.register(r'departments', DepartmentViewSet, basename='departments')
@@ -29,5 +30,8 @@ urlpatterns = [
     path('sotuv-hisoboti/', SotuvHisobotiView.as_view(), name='sotuv-hisoboti'),
     path('xodimlar-hisoboti/', XodimlarHisobotiView.as_view(), name='xodimlar-hisoboti'),
     path('abc-analysis/', AbcAnalysisView.as_view(), name='abc-analysis'),
+    path('foods/import/', ExcelMenuImportView.as_view(), name='kitchen-foods-import'),
+    path('foods/import-excel/', ExcelMenuImportView.as_view(), name='kitchen-foods-import-excel'),
+    path('import-excel/', ExcelMenuImportView.as_view(), name='kitchen-import-excel'),
     path('', include(router.urls)),
 ]

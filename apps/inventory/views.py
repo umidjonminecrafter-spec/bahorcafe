@@ -2,12 +2,15 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import transaction
 from django.db.models import Sum, Avg, Count, Q, F
 from django.utils import timezone
 from datetime import timedelta, datetime
 from decimal import Decimal
 import logging
+
+from apps.core.excel_importer import extract_rows_from_request, normalize_row_dict
 
 logger = logging.getLogger('bahor_app')
 
@@ -572,13 +575,336 @@ class InventoryStockHistoryViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(movement_type=movement)
         return qs
 
+def process_inventory_import(rows, default_warehouse=None, default_supplier=None, create_purchase=False, document_number="", date_val=None):
+    if not default_warehouse:
+        default_warehouse = Warehouse.objects.first()
+
+    created_count = 0
+    updated_count = 0
+    errors = []
+    imported_products = []
+    total_purchase_amount = Decimal('0.0')
+
+    purchase = None
+    if create_purchase:
+        sup = default_supplier or Supplier.objects.first()
+        purchase = Purchase.objects.create(
+            warehouse=default_warehouse,
+            supplier=sup,
+            document_number=document_number or f"IMP-{timezone.now().strftime('%Y%m%d%H%M%S')}",
+            date=date_val or timezone.now().date(),
+            total_amount=Decimal('0.0'),
+            notes="Excel / EDI orqali avtomatik kirim qilindi"
+        )
+
+    for idx, r in enumerate(rows, start=1):
+        try:
+            norm = normalize_row_dict(r)
+            name = norm['name']
+            if not name:
+                errors.append(f"{idx}-qator: Mahsulot nomi bo'sh, o'tkazib yuborildi.")
+                continue
+
+            # Resolve Category
+            category_name = norm['category']
+            category = None
+            if category_name:
+                category, _ = InventoryCategory.objects.get_or_create(name=category_name)
+
+            # Resolve Warehouse
+            wh_name = norm['warehouse']
+            warehouse = default_warehouse
+            if wh_name:
+                wh_obj = Warehouse.objects.filter(name__icontains=wh_name).first()
+                if wh_obj:
+                    warehouse = wh_obj
+
+            # Resolve Unit
+            unit_val = norm['unit'] or "kg"
+            Unit.objects.get_or_create(name=unit_val, defaults={'short_name': unit_val})
+
+            barcode = norm['barcode']
+            mxik = norm['mxik']
+            purchase_price = norm['purchase_price']
+            selling_price = norm['selling_price']
+            wholesale_price = norm['wholesale_price']
+            margin_percent = norm['margin_percent']
+            qqs_rate = norm['qqs_rate']
+            qty = norm['quantity']
+            min_stock = norm['min_stock']
+            max_stock = norm['max_stock']
+
+            # Calculate selling price if margin given and selling price is 0
+            if selling_price == 0 and purchase_price > 0 and margin_percent > 0:
+                selling_price = purchase_price * (Decimal('1.0') + (margin_percent / Decimal('100.0')))
+            elif margin_percent == 0 and purchase_price > 0 and selling_price > purchase_price:
+                margin_percent = ((selling_price - purchase_price) / purchase_price) * Decimal('100.0')
+
+            # Search existing product
+            product = None
+            if barcode:
+                product = InventoryProduct.objects.filter(barcode=barcode).first()
+            if not product and warehouse:
+                product = InventoryProduct.objects.filter(name__iexact=name, warehouse=warehouse).first()
+            if not product:
+                product = InventoryProduct.objects.filter(name__iexact=name).first()
+
+            is_new = False
+            if product:
+                # Update existing product
+                prev_stock = product.current_stock
+                if barcode and not product.barcode:
+                    product.barcode = barcode
+                if mxik and not product.mxik:
+                    product.mxik = mxik
+                if category and not product.category:
+                    product.category = category
+                if purchase_price > 0:
+                    product.purchase_price = purchase_price
+                if selling_price > 0:
+                    product.selling_price = selling_price
+                if wholesale_price > 0:
+                    product.wholesale_price = wholesale_price
+                if margin_percent > 0:
+                    product.margin_percent = margin_percent
+                if qqs_rate > 0:
+                    product.qqs_rate = qqs_rate
+                if min_stock > 0:
+                    product.min_stock = min_stock
+                if max_stock > 0:
+                    product.max_stock = max_stock
+
+                if qty > 0:
+                    product.current_stock = prev_stock + qty
+                product.save()
+
+                if qty > 0:
+                    InventoryStockHistory.objects.create(
+                        product=product,
+                        movement_type='in',
+                        quantity=qty,
+                        previous_stock=prev_stock,
+                        new_stock=product.current_stock,
+                        reference_id=f"Import #{purchase.document_number if purchase else 'EXCEL'}",
+                        note="Excel/EDI import orqali qoldiq oshirildi"
+                    )
+
+                updated_count += 1
+            else:
+                # Create new product
+                is_new = True
+                product = InventoryProduct.objects.create(
+                    category=category,
+                    warehouse=warehouse,
+                    name=name,
+                    barcode=barcode,
+                    mxik=mxik,
+                    unit=unit_val,
+                    purchase_price=purchase_price,
+                    selling_price=selling_price,
+                    wholesale_price=wholesale_price,
+                    margin_percent=margin_percent,
+                    qqs_rate=qqs_rate,
+                    min_stock=min_stock,
+                    max_stock=max_stock,
+                    current_stock=qty if qty > 0 else Decimal('0.0'),
+                    is_active=True
+                )
+
+                if qty > 0:
+                    InventoryStockHistory.objects.create(
+                        product=product,
+                        movement_type='in',
+                        quantity=qty,
+                        previous_stock=Decimal('0.0'),
+                        new_stock=qty,
+                        reference_id=f"Import #{purchase.document_number if purchase else 'EXCEL'}",
+                        note="Excel/EDI import orqali yangi tovar yaratildi va qoldiq kiritildi"
+                    )
+
+                created_count += 1
+
+            if purchase and qty > 0:
+                item_price = purchase_price if purchase_price > 0 else product.purchase_price
+                PurchaseItem.objects.create(
+                    purchase=purchase,
+                    product=product,
+                    quantity=qty,
+                    purchase_price=item_price,
+                    margin_percent=margin_percent,
+                    selling_price=selling_price
+                )
+                total_purchase_amount += (qty * item_price)
+
+            imported_products.append({
+                'id': product.id,
+                'name': product.name,
+                'barcode': product.barcode,
+                'unit': product.unit,
+                'purchase_price': float(product.purchase_price),
+                'selling_price': float(product.selling_price),
+                'current_stock': float(product.current_stock),
+                'status': 'created' if is_new else 'updated'
+            })
+
+        except Exception as err:
+            logger.error(f"Error importing row {idx}: {err}")
+            errors.append(f"{idx}-qator: {str(err)}")
+
+    if purchase:
+        purchase.total_amount = total_purchase_amount
+        purchase.save(update_fields=['total_amount'])
+
+    return {
+        'total_rows': len(rows),
+        'created_count': created_count,
+        'updated_count': updated_count,
+        'imported_rows': created_count + updated_count,
+        'purchase_id': purchase.id if purchase else None,
+        'errors': errors,
+        'products': imported_products
+    }
+
 class EdiImportView(APIView):
     permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
+    @transaction.atomic
     def post(self, request):
+        rows = extract_rows_from_request(request)
+        if not rows:
+            return Response({
+                "status": "error",
+                "message": "Fayl bo'sh yoki yuklash uchun tovarlar topilmadi. Excel (.xlsx), CSV, XML yoki JSON fayl yuboring.",
+                "imported_rows": 0
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        wh_val = request.data.get('warehouse') or request.data.get('warehouse_id') or request.query_params.get('warehouse_id')
+        warehouse = None
+        if wh_val:
+            warehouse = Warehouse.objects.filter(id=int(wh_val)).first() if str(wh_val).isdigit() else Warehouse.objects.filter(name__icontains=str(wh_val)).first()
+        if not warehouse:
+            warehouse = Warehouse.objects.first()
+
+        sup_val = request.data.get('supplier') or request.data.get('supplier_id')
+        supplier = None
+        if sup_val:
+            supplier = Supplier.objects.filter(id=int(sup_val)).first() if str(sup_val).isdigit() else Supplier.objects.filter(name__icontains=str(sup_val)).first()
+        if not supplier:
+            supplier = Supplier.objects.first()
+
+        create_purchase = request.data.get('create_purchase', True)
+        if isinstance(create_purchase, str):
+            create_purchase = create_purchase.lower() in ('true', '1', 'yes')
+
+        doc_num = request.data.get('document_number') or request.data.get('faktura_raqami') or ""
+        date_str = request.data.get('date') or request.data.get('sana')
+
+        result = process_inventory_import(
+            rows=rows,
+            default_warehouse=warehouse,
+            default_supplier=supplier,
+            create_purchase=create_purchase,
+            document_number=doc_num,
+            date_val=date_str
+        )
+
         return Response({
             "status": "success",
-            "message": "EDI fayl muvaffaqiyatli qabul qilindi",
-            "imported_rows": 12
-        })
+            "message": f"EDI/Excel fayli orqali {result['imported_rows']} ta tovar muvaffaqiyatli qabul qilindi",
+            "imported_rows": result['imported_rows'],
+            "created_count": result['created_count'],
+            "updated_count": result['updated_count'],
+            "purchase_id": result['purchase_id'],
+            "errors": result['errors'],
+            "products": result['products']
+        }, status=status.HTTP_200_OK if result['imported_rows'] > 0 else status.HTTP_400_BAD_REQUEST)
+
+class ExcelProductImportView(APIView):
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    @transaction.atomic
+    def post(self, request):
+        rows = extract_rows_from_request(request)
+        if not rows:
+            return Response({
+                "status": "error",
+                "message": "Fayl bo'sh yoki yuklash uchun tovarlar topilmadi. Excel (.xlsx), CSV yoki JSON fayl yuboring.",
+                "imported_rows": 0
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        wh_val = request.data.get('warehouse') or request.data.get('warehouse_id') or request.query_params.get('warehouse_id')
+        warehouse = None
+        if wh_val:
+            warehouse = Warehouse.objects.filter(id=int(wh_val)).first() if str(wh_val).isdigit() else Warehouse.objects.filter(name__icontains=str(wh_val)).first()
+        if not warehouse:
+            warehouse = Warehouse.objects.first()
+
+        result = process_inventory_import(
+            rows=rows,
+            default_warehouse=warehouse,
+            create_purchase=False
+        )
+
+        return Response({
+            "status": "success",
+            "message": f"Excel orqali {result['imported_rows']} ta tovar muvaffaqiyatli yuklandi",
+            "imported_rows": result['imported_rows'],
+            "created_count": result['created_count'],
+            "updated_count": result['updated_count'],
+            "errors": result['errors'],
+            "products": result['products']
+        }, status=status.HTTP_200_OK if result['imported_rows'] > 0 else status.HTTP_400_BAD_REQUEST)
+
+class ExcelPurchaseImportView(APIView):
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    @transaction.atomic
+    def post(self, request):
+        rows = extract_rows_from_request(request)
+        if not rows:
+            return Response({
+                "status": "error",
+                "message": "Fayl bo'sh yoki xarid uchun tovarlar topilmadi. Excel (.xlsx), CSV yoki JSON fayl yuboring.",
+                "imported_rows": 0
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        wh_val = request.data.get('warehouse') or request.data.get('warehouse_id') or request.query_params.get('warehouse_id')
+        warehouse = None
+        if wh_val:
+            warehouse = Warehouse.objects.filter(id=int(wh_val)).first() if str(wh_val).isdigit() else Warehouse.objects.filter(name__icontains=str(wh_val)).first()
+        if not warehouse:
+            warehouse = Warehouse.objects.first()
+
+        sup_val = request.data.get('supplier') or request.data.get('supplier_id')
+        supplier = None
+        if sup_val:
+            supplier = Supplier.objects.filter(id=int(sup_val)).first() if str(sup_val).isdigit() else Supplier.objects.filter(name__icontains=str(sup_val)).first()
+        if not supplier:
+            supplier = Supplier.objects.first()
+
+        doc_num = request.data.get('document_number') or request.data.get('faktura_raqami') or ""
+        date_str = request.data.get('date') or request.data.get('sana')
+
+        result = process_inventory_import(
+            rows=rows,
+            default_warehouse=warehouse,
+            default_supplier=supplier,
+            create_purchase=True,
+            document_number=doc_num,
+            date_val=date_str
+        )
+
+        return Response({
+            "status": "success",
+            "message": f"Excel orqali kirim ({result['imported_rows']} ta tovar) muvaffaqiyatli saqlandi",
+            "imported_rows": result['imported_rows'],
+            "created_count": result['created_count'],
+            "updated_count": result['updated_count'],
+            "purchase_id": result['purchase_id'],
+            "errors": result['errors'],
+            "products": result['products']
+        }, status=status.HTTP_200_OK if result['imported_rows'] > 0 else status.HTTP_400_BAD_REQUEST)
 

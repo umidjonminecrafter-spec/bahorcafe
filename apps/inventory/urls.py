@@ -10,7 +10,9 @@ from .views import (
     WriteOffViewSet,
     RealizationViewSet,
     InventoryStockHistoryViewSet,
-    EdiImportView
+    EdiImportView,
+    ExcelProductImportView,
+    ExcelPurchaseImportView
 )
 
 router = DefaultRouter()
@@ -29,5 +31,10 @@ router.register(r'tarix', InventoryStockHistoryViewSet, basename='tarix')
 
 urlpatterns = [
     path('edi-import/', EdiImportView.as_view(), name='edi-import'),
+    path('import-excel/', ExcelProductImportView.as_view(), name='inventory-import-excel'),
+    path('products/import/', ExcelProductImportView.as_view(), name='inventory-products-import'),
+    path('products/import-excel/', ExcelProductImportView.as_view(), name='inventory-products-import-excel'),
+    path('purchases/import-excel/', ExcelPurchaseImportView.as_view(), name='inventory-purchases-import-excel'),
+    path('kirim/import-excel/', ExcelPurchaseImportView.as_view(), name='inventory-kirim-import-excel'),
     path('', include(router.urls)),
 ]
